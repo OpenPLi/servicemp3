@@ -2844,6 +2844,24 @@ RESULT eServiceMP3::enableSubtitles(iSubtitleUser *user, struct SubtitleTrack &t
 
 		m_subtitle_widget = user;
 
+		if (track.type != stDVB)
+		{
+			bool validposition = false;
+			pts_t ppos = 0;
+			if (getPlayPosition(ppos) >= 0)
+			{
+				validposition = true;
+				ppos -= 100;
+				if (ppos < 0)
+					ppos = 0;
+			}
+			if (validposition)
+			{
+				/* flush */
+				seekTo(ppos);
+			}
+		}
+
 		eDebug ("[eServiceMP3] switched to subtitle stream %i", m_currentSubtitleStream);
 
 #ifdef GSTREAMER_SUBTITLE_SYNC_MODE_BUG
