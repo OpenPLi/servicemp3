@@ -23,7 +23,7 @@
 #include <gst/pbutils/missing-plugins.h>
 #include <sys/stat.h>
 
-#define HTTP_TIMEOUT 30
+#define HTTP_TIMEOUT 60
 
 /*
  * UNUSED variable from service reference is now used as buffer flag for gstreamer
@@ -457,11 +457,11 @@ eServiceMP3::eServiceMP3(eServiceReference ref):
 	m_use_prefillbuffer = false;
 	m_paused = false;
 	m_seek_paused = false;
-	m_autoaudio = true;
+	m_autoturnon = eConfigManager::getConfigBoolValue("config.subtitles.pango_autoturnon", true);
 	m_cuesheet_loaded = false; /* cuesheet CVR */
 	m_use_chapter_entries = false; /* TOC chapter support CVR */
 	m_last_seek_pos = 0; /* CVR last seek position */
-	m_useragent = "Enigma2 HbbTV/1.1.1 (+PVR+RTSP+DL;OpenPLi;;;)";
+	m_useragent = "HbbTV/1.1.1 (+PVR+RTSP+DL; Sonic; TV44; 1.32.455; 2.002) Bee/3.5";
 	m_extra_headers = "";
 	m_download_buffer_path = "";
 	m_prev_decoder_time = -1;
@@ -471,18 +471,24 @@ eServiceMP3::eServiceMP3(eServiceReference ref):
 	m_decoder = NULL;
 
 	std::string sref = ref.toString();
-	if (!sref.empty()) {
+	if (!sref.empty())
+	{
 		std::vector<eIPTVDBItem> &iptv_services = eDVBDB::getInstance()->iptv_services;
-		for(std::vector<eIPTVDBItem>::iterator it = iptv_services.begin(); it != iptv_services.end(); ++it) {
-			if (sref.find(it->s_ref) != std::string::npos) {
+		for(std::vector<eIPTVDBItem>::iterator it = iptv_services.begin(); it != iptv_services.end(); ++it)
+		{
+			if (sref.find(it->s_ref) != std::string::npos)
+			{
 				m_currentAudioStream = it->ampeg_pid;
 				m_currentSubtitleStream = it->subtitle_pid;
 				m_cachedSubtitleStream = m_currentSubtitleStream;
+				eDebug("[eServiceMP3] Init start iptv_service use sref pid's A: %d; S: %d", m_currentAudioStream, m_currentSubtitleStream);
+				break;
 			}
 		}
 	}
 
 	CONNECT(m_subtitle_sync_timer->timeout, eServiceMP3::pushSubtitles);
+	CONNECT(m_dvb_subtitle_sync_timer->timeout, eServiceMP3::pushDVBSubtitles);
 	CONNECT(m_pump.recv_msg, eServiceMP3::gstPoll);
 	CONNECT(m_nownext_timer->timeout, eServiceMP3::updateEpgCacheNowNext);
 	m_aspect = m_width = m_height = m_framerate = m_progressive = m_gamma = -1;
@@ -563,6 +569,11 @@ eServiceMP3::eServiceMP3(eServiceReference ref):
 	{
 		m_sourceinfo.containertype = ctMP4;
 		m_sourceinfo.audiotype = atAAC;
+	}
+	else if ( strcasecmp(ext, ".dra") == 0 )
+	{
+		m_sourceinfo.containertype = ctDRA;
+		m_sourceinfo.audiotype = atDRA;
 	}
 	else if (strcasecmp(ext, ".m3u8") == 0)
 		m_sourceinfo.is_hls = TRUE;
@@ -876,7 +887,7 @@ RESULT eServiceMP3::start()
 		case GST_STATE_CHANGE_FAILURE:
 			eDebug("[eServiceMP3] failed to start pipeline");
 			stop();
-			break;
+			return -1;
 		case GST_STATE_CHANGE_SUCCESS:
 			m_is_live = false;
 			break;
@@ -1139,7 +1150,7 @@ seek_unpause:
 	{
 		if (ratio >= 0.0)
 		{
-			gst_element_seek(m_gst_playbin, ratio, GST_FORMAT_TIME, (GstSeekFlags)(GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_SKIP), GST_SEEK_TYPE_SET, pos, GST_SEEK_TYPE_SET, -1);
+			gst_element_seek(m_gst_playbin, ratio, GST_FORMAT_TIME, (GstSeekFlags)(GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_KEY_UNIT | GST_SEEK_FLAG_SKIP), GST_SEEK_TYPE_SET, pos, GST_SEEK_TYPE_SET, -1);
 		}
 		else
 		{
@@ -1181,7 +1192,7 @@ RESULT eServiceMP3::getPlayPosition(pts_t &pts)
 	if (!m_gst_playbin || m_state != stRunning)
 		return -1;
 
-	if ((audioSink || videoSink) && !m_paused && !m_sourceinfo.is_hls)
+	if ((audioSink || videoSink) && !m_paused)
 	{
 		g_signal_emit_by_name(videoSink ? videoSink : audioSink, "get-decoder-time", &pos);
 		if (!GST_CLOCK_TIME_IS_VALID(pos)) return -1;
@@ -1788,6 +1799,12 @@ void eServiceMP3::gstBusCall(GstMessage *msg)
 					subsink = gst_bin_get_by_name(GST_BIN(m_gst_playbin), "subtitle_sink");
 					if (subsink)
 					{
+						/*
+						 * FIX: Seems that subtitle sink have a delay of receiving subtitles buffer.
+						 * So we move ahead the PTS of the subtitle sink by 2 seconds.
+						 * Then we do aditional sync of subtitles if they arrive ahead of PTS
+						 */
+						g_object_set (G_OBJECT (subsink), "ts-offset", -2LL * GST_SECOND, NULL);
 #ifdef GSTREAMER_SUBTITLE_SYNC_MODE_BUG
 						/*
 						 * HACK: disable sync mode for now, gstreamer suffers from a bug causing sparse streams to loose sync, after pause/resume / skip
@@ -1861,7 +1878,7 @@ void eServiceMP3::gstBusCall(GstMessage *msg)
 				case GST_STATE_CHANGE_PAUSED_TO_PLAYING:
 				{
 					m_paused = false;
-					if (m_autoaudio)
+					if (m_currentAudioStream < 0)
 					{
 						unsigned int autoaudio = 0;
 						int autoaudio_level = 5;
@@ -1898,7 +1915,10 @@ void eServiceMP3::gstBusCall(GstMessage *msg)
 
 						if (autoaudio)
 							selectTrack(autoaudio);
-						m_autoaudio = false;
+					}
+					else
+					{
+						selectTrack(m_currentAudioStream);
 					}
 					m_event((iPlayableService*)this, evGstreamerPlayStarted);
 				}	break;
@@ -2390,6 +2410,7 @@ void eServiceMP3::playbinNotifySource(GObject *object, GParamSpec *unused, gpoin
 				if (!strcmp(sourcename, "souphttpsrc"))
 				{
 					g_object_set(G_OBJECT(source), "timeout", HTTP_TIMEOUT, NULL);
+					g_object_set(G_OBJECT(source), "retries", 20, NULL);
 				}
 			}
 		}
@@ -2512,7 +2533,7 @@ audiotype_t eServiceMP3::gstCheckAudioPad(GstStructure* structure)
 		}
 	}
 
-	else if ( gst_structure_has_name (structure, "audio/x-ac3") || gst_structure_has_name (structure, "audio/ac3") )
+	else if ( gst_structure_has_name (structure, "audio/x-ac3") || gst_structure_has_name (structure, "audio/ac3") || gst_structure_has_name (structure, "truehd") )
 		return atAC3;
 	else if ( gst_structure_has_name (structure, "audio/x-dts") || gst_structure_has_name (structure, "audio/dts") )
 		return atDTS;
@@ -2835,7 +2856,7 @@ RESULT eServiceMP3::enableSubtitles(iSubtitleUser *user, struct SubtitleTrack &t
 	{
 		return -1;
 	}
-	eDebug ("[eServiceMP3][enableSubtitles] entered: subtitle stream %i track.pid %i", m_currentSubtitleStream, track.pid - 1);
+	eDebug("[eServiceMP3][enableSubtitles] entered: subtitle stream %i track.pid %i", m_currentSubtitleStream, track.pid - 1);
 	g_object_set (G_OBJECT (m_gst_playbin), "current-text", -1, NULL);
 	m_subtitle_sync_timer->stop();
 	m_dvb_subtitle_sync_timer->stop();
@@ -2868,7 +2889,7 @@ RESULT eServiceMP3::enableSubtitles(iSubtitleUser *user, struct SubtitleTrack &t
 
 	m_subtitle_widget = user;
 
-	eDebug ("[eServiceMP3] switched to subtitle stream %i", m_currentSubtitleStream);
+	eDebug("[eServiceMP3] switched to subtitle stream %i", m_currentSubtitleStream);
 
 #ifdef GSTREAMER_SUBTITLE_SYNC_MODE_BUG
 		/*
@@ -2901,11 +2922,10 @@ RESULT eServiceMP3::disableSubtitles()
 
 RESULT eServiceMP3::getCachedSubtitle(struct SubtitleTrack &track)
 {
-
-	bool autoturnon = eConfigManager::getConfigBoolValue("config.subtitles.pango_autoturnon", true);
-	int m_subtitleStreams_size = (int)m_subtitleStreams.size();
-	if (!autoturnon)
+	if (!m_autoturnon)
 		return -1;
+
+	int m_subtitleStreams_size = (int)m_subtitleStreams.size();
 
 	if (m_cachedSubtitleStream == -2 && m_subtitleStreams_size)
 	{
@@ -2943,12 +2963,14 @@ RESULT eServiceMP3::getCachedSubtitle(struct SubtitleTrack &track)
 		}
 	}
 
+	eDebug("[eServiceMP3][getCachedSubtitle] m_cachedSubtitleStream = %d; m_currentSubtitleStream = %d; m_subtitleStreams_size = %d ", m_cachedSubtitleStream, m_currentSubtitleStream, m_subtitleStreams_size);
+
 	if (m_cachedSubtitleStream >= 0 && m_cachedSubtitleStream < m_subtitleStreams_size)
 	{
 		subtype_t type = m_subtitleStreams[m_cachedSubtitleStream].type;
 		track.type = type == stDVB ? 0 : 2;
 		track.pid = m_cachedSubtitleStream + 1;
-		track.page_number = int(m_subtitleStreams[m_cachedSubtitleStream].type);
+		track.page_number = int(type);
 		track.magazine_number = 0;
 		track.language_code = m_subtitleStreams[m_cachedSubtitleStream].language_code;
 		return 0;
@@ -2969,6 +2991,13 @@ RESULT eServiceMP3::getSubtitleList(std::vector<struct SubtitleTrack> &subtitlel
 		case stUnknown:
 		case stVOB:
 		case stPGS:
+			struct SubtitleTrack track = {};
+			track.type = 1;
+			track.pid = stream_idx;
+			track.page_number = int(type);
+			track.magazine_number = 0;
+			track.language_code = IterSubtitleStream->language_code;
+			subtitlelist.push_back(track);
 			break;
 		case stDVB:
 		{
