@@ -816,24 +816,42 @@ eServiceMP3::~eServiceMP3()
 
 	stop();
 
+	/* Explicitly bring hardware sinks to NULL state before releasing
+	 * their references. dvbvideosink and dvbaudiosink hold hardware
+	 * decoder file descriptors that are shared with the DVB frontend
+	 * layer. If these sinks are not fully stopped before the next DVB
+	 * service is started, the AVL6261 demodulator cannot acquire
+	 * DVB-S2 carriers (8PSK and higher) because the I2C path to the
+	 * chip is still occupied by the hardware decoder subsystem.
+	 * gst_object_unref() alone only decrements the refcount and does
+	 * not guarantee the sink reaches GST_STATE_NULL synchronously. */
+	if (audioSink)
+	{
+		gst_element_set_state(GST_ELEMENT(audioSink), GST_STATE_NULL);
+		gst_element_get_state(GST_ELEMENT(audioSink), NULL, NULL, 3 * GST_SECOND);
+		gst_object_unref(GST_OBJECT(audioSink));
+		audioSink = NULL;
+	}
+	if (videoSink)
+	{
+		gst_element_set_state(GST_ELEMENT(videoSink), GST_STATE_NULL);
+		gst_element_get_state(GST_ELEMENT(videoSink), NULL, NULL, 3 * GST_SECOND);
+		gst_object_unref(GST_OBJECT(videoSink));
+		videoSink = NULL;
+	}
+
+	/* Delete eTSMPEGDecoder properly to release hardware decoder handle
+	 * (used for radio picture display). Setting to NULL without delete
+	 * leaks the object and keeps the decoder resource allocated. */
 	if (m_decoder)
 	{
+		delete m_decoder;
 		m_decoder = NULL;
 	}
 
 	if (m_stream_tags)
 		gst_tag_list_free(m_stream_tags);
 
-	if (audioSink)
-	{
-		gst_object_unref(GST_OBJECT(audioSink));
-		audioSink = NULL;
-	}
-	if (videoSink)
-	{
-		gst_object_unref(GST_OBJECT(videoSink));
-		videoSink = NULL;
-	}
 	if (m_gst_playbin)
 	{
 		gst_object_unref (GST_OBJECT (m_gst_playbin));
@@ -990,7 +1008,23 @@ RESULT eServiceMP3::stop()
 		gst_element_state_get_name(pending),
 		gst_element_state_change_return_get_name(ret));
 	ret = gst_element_set_state(m_gst_playbin, GST_STATE_NULL);
-	if (ret != GST_STATE_CHANGE_SUCCESS)
+	if (ret == GST_STATE_CHANGE_ASYNC)
+	{
+		/* Pipeline is still tearing down asynchronously (e.g. dvbvideosink
+		 * or dvbaudiosink still holding hardware decoder resources).
+		 * Wait up to 10 seconds for NULL state to complete.
+		 * Without this wait the hardware decoder handle may remain open
+		 * when Enigma2 switches to a DVB service, leaving the AVL6261
+		 * demodulator unable to acquire 8PSK/DVB-S2 carriers because the
+		 * shared I2C path to the chip is still in use. */
+		ret = gst_element_get_state(m_gst_playbin, &state, &pending, 10 * GST_SECOND);
+		if (state != GST_STATE_NULL)
+			eDebug("[eServiceMP3] stop: pipeline did not reach NULL after 10s "
+				"(state:%s pending:%s) - hardware decoder may still be active",
+				gst_element_state_get_name(state),
+				gst_element_state_get_name(pending));
+	}
+	else if (ret != GST_STATE_CHANGE_SUCCESS)
 		eDebug("[eServiceMP3] stop GST_STATE_NULL failure");
 	if (!m_sourceinfo.is_streaming && m_cuesheet_loaded)
 		saveCuesheet();
