@@ -2803,8 +2803,8 @@ void eServiceMP3::pushDVBSubtitles()
 		if (diff < 20 || decoder_ms == 0)
 		{
 			eTrace("[eServiceMP3] Showing subtitles at %lld. Current decoder time: %lld. Difference: %lld", show_time, decoder_ms, diff);
-			eDebug("[eServiceMP3] DVB widget=%p, stream=%d", m_subtitle_widget, m_currentSubtitleStream);
-			m_subtitle_widget->setPage(dvb_page);
+			if (m_subtitle_widget)
+				m_subtitle_widget->setPage(dvb_page);
 			m_dvb_subtitle_pages.pop_front();
 		}
 		else
