@@ -479,9 +479,8 @@ eServiceMP3::eServiceMP3(eServiceReference ref):
 			if (sref.find(it->s_ref) != std::string::npos)
 			{
 				m_currentAudioStream = it->ampeg_pid;
-				m_currentSubtitleStream = it->subtitle_pid;
-				m_cachedSubtitleStream = m_currentSubtitleStream;
-				eDebug("[eServiceMP3] Init start iptv_service use sref pid's A: %d; S: %d", m_currentAudioStream, m_currentSubtitleStream);
+				m_cachedSubtitleStream = it->subtitle_pid;
+				eDebug("[eServiceMP3] Init start iptv_service use sref pid's A: %d; S: %d", m_currentAudioStream, m_cachedSubtitleStream);
 				break;
 			}
 		}
