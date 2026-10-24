@@ -1684,7 +1684,13 @@ int eServiceMP3::getCurrentTrack()
 
 RESULT eServiceMP3::selectTrack(unsigned int i)
 {
-	m_currentAudioStream = getCurrentTrack();
+	if (!m_gst_playbin)
+		return -1;
+
+	int current_audio = -1;
+	g_object_get(G_OBJECT(m_gst_playbin), "current-audio", &current_audio, NULL);
+	m_currentAudioStream = current_audio;
+
 	if(m_currentAudioStream == (int)i)
 		return m_currentAudioStream;
 	eDebug("[eServiceMP3] selectTrack %d", i);
