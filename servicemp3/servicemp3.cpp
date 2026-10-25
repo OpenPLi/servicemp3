@@ -1964,10 +1964,13 @@ void eServiceMP3::gstBusCall(GstMessage *msg)
 						{
 							if (!m_audioStreams[i].language_code.empty())
 							{
+								const gchar *language = gst_tag_get_language_code_iso_639_2B(m_audioStreams[i].language_code.c_str());
+								if (!language)
+									language = m_audioStreams[i].language_code.c_str();
 								int x = 1;
 								for (std::vector<std::string>::iterator it = autoaudio_languages.begin(); x < autoaudio_level && it != autoaudio_languages.end(); x++, it++)
 								{
-									if ((*it).find(m_audioStreams[i].language_code) != std::string::npos)
+									if ((*it).find(language) != std::string::npos)
 									{
 										autoaudio = i;
 										autoaudio_level = x;
