@@ -3003,7 +3003,6 @@ RESULT eServiceMP3::getCachedSubtitle(struct SubtitleTrack &track)
 
 	if (m_cachedSubtitleStream == -2 && m_subtitleStreams_size)
 	{
-		m_cachedSubtitleStream = -1;
 		int autosub_level = 5;
 		std::string configvalue;
 		std::vector<std::string> autosub_languages;
@@ -3026,7 +3025,7 @@ RESULT eServiceMP3::getCachedSubtitle(struct SubtitleTrack &track)
 				continue;
 
 			// Pango may select the first non-DVB track as a fallback.
-			if (!isDVB && m_cachedSubtitleStream == -1)
+			if (!isDVB && m_cachedSubtitleStream == -2)
 				m_cachedSubtitleStream = i;
 
 			if (!m_subtitleStreams[i].language_code.empty())
