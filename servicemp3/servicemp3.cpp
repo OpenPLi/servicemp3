@@ -20,6 +20,7 @@
 #include <lib/base/estring.h>
 
 #include <gst/gst.h>
+#include <gst/tag/tag.h>
 #include <gst/pbutils/missing-plugins.h>
 #include <sys/stat.h>
 
@@ -3030,10 +3031,13 @@ RESULT eServiceMP3::getCachedSubtitle(struct SubtitleTrack &track)
 
 			if (!m_subtitleStreams[i].language_code.empty())
 			{
+				const gchar *language = gst_tag_get_language_code_iso_639_2B(m_subtitleStreams[i].language_code.c_str());
+				if (!language)
+					language = m_subtitleStreams[i].language_code.c_str();
 				int x = 1;
 				for (std::vector<std::string>::iterator it2 = autosub_languages.begin(); x < autosub_level && it2 != autosub_languages.end(); x++, it2++)
 				{
-					if ((*it2).find(m_subtitleStreams[i].language_code) != std::string::npos)
+					if ((*it2).find(language) != std::string::npos)
 					{
 						autosub_level = x;
 						m_cachedSubtitleStream = i;
