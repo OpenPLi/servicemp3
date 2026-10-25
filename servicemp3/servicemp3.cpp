@@ -479,8 +479,9 @@ eServiceMP3::eServiceMP3(eServiceReference ref):
 			if (sref.find(it->s_ref) != std::string::npos)
 			{
 				m_currentAudioStream = it->ampeg_pid;
-				m_cachedSubtitleStream = it->subtitle_pid;
-				eDebug("[eServiceMP3] Init start iptv_service use sref pid's A: %d; S: %d", m_currentAudioStream, m_cachedSubtitleStream);
+				if (eConfigManager::getConfigBoolValue("config.autolanguage.subtitle_usecache", true))
+					m_cachedSubtitleStream = it->subtitle_pid;
+				eDebug("[eServiceMP3] Init start iptv_serviam = it->subtitle_pid;ce use sref pid's A: %d; S: %d", m_currentAudioStream, m_cachedSubtitleStream);
 				break;
 			}
 		}
@@ -2998,14 +2999,11 @@ RESULT eServiceMP3::disableSubtitles()
 
 RESULT eServiceMP3::getCachedSubtitle(struct SubtitleTrack &track)
 {
-	if (!m_autoturnon)
-		return -1;
-
 	int m_subtitleStreams_size = (int)m_subtitleStreams.size();
 
 	if (m_cachedSubtitleStream == -2 && m_subtitleStreams_size)
 	{
-		m_cachedSubtitleStream = 0;
+		m_cachedSubtitleStream = -1;
 		int autosub_level = 5;
 		std::string configvalue;
 		std::vector<std::string> autosub_languages;
@@ -3023,6 +3021,14 @@ RESULT eServiceMP3::getCachedSubtitle(struct SubtitleTrack &track)
 			autosub_languages.push_back(configvalue);
 		for (int i = 0; i < m_subtitleStreams_size; i++)
 		{
+			const bool isDVB = m_subtitleStreams[i].type == stDVB;
+			if (!isDVB && !m_autoturnon)
+				continue;
+
+			// Pango may select the first non-DVB track as a fallback.
+			if (!isDVB && m_cachedSubtitleStream == -1)
+				m_cachedSubtitleStream = i;
+
 			if (!m_subtitleStreams[i].language_code.empty())
 			{
 				int x = 1;
@@ -3044,6 +3050,9 @@ RESULT eServiceMP3::getCachedSubtitle(struct SubtitleTrack &track)
 	if (m_cachedSubtitleStream >= 0 && m_cachedSubtitleStream < m_subtitleStreams_size)
 	{
 		subtype_t type = m_subtitleStreams[m_cachedSubtitleStream].type;
+		if (type != stDVB && !m_autoturnon)
+			return -1;
+
 		track.type = type == stDVB ? 0 : 2;
 		track.pid = m_cachedSubtitleStream + 1;
 		track.page_number = int(type);
